@@ -31,6 +31,11 @@ OPTIONS:
     -f, --from <start>          
     -i, --target <target>
 ```
+## Method
+
+The subgraph extraction is quite straightforward, we first search the graph file for the target identifier (`-i`). From this path we extract the region from `-f` to `-t` and create a hashset of the nodes. We then read the graph file again, extract the path, and create a bool vector specifying whether the node is present in the hashset or not. We scan the bool vector for regions of true of at least size `n` (`n` = fraction of nodes query path). If the region satisfies `n` we now have a region that has nodes present in our query and is long enough to satisfy our criteria, this however may contain duplicates. We deduplicate the region and intersect it with the query node set to validate if `n` is actually satisfied. If so, we extract the context up to `c` to the left and right and write the matching path to a [GFA](http://gfa-spec.github.io/GFA-spec/GFA1.html). 
+
+Ps. first ever Rust script, so optimizations are welcome :)
 ## Authors
 
 - [@rickbeeloo](https://www.github.com/rickbeeloo)
