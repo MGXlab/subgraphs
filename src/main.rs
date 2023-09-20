@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::collections::HashMap;
 use std::cmp;
 use std::fs::File;
+use structopt::StructOpt;
 
 struct GFAWriter {
     writer: BufWriter<File>,
@@ -14,7 +15,7 @@ impl GFAWriter {
         let f = File::create(out_path)?;
         let mut writer = BufWriter::new(f);
 
-        // Write the header line (optional but recommended)
+        // Write the header line
         writer.write_all(b"H\tVN:Z:2.0\n")?;
 
         Ok(GFAWriter {
@@ -104,7 +105,6 @@ fn load_nodes(node_file: &str) -> HashMap<usize, String> {
 
 
 fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize) ->  Result<Vec<usize>, ()> {
-
     let mut reader = my_reader::BufReader::open(graph_path).unwrap();
     let mut buffer = String::new();
 
@@ -182,23 +182,45 @@ fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, g
     }
 }
 
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "Graphtie - subgraphs", about = "Extracting an LMEM subgraph")]
+struct Opt {
+    #[structopt(short, long)]
+    debug: bool,
+
+    #[structopt(short = "g", long = "graph", about = "Path to graph file, cf.seq")]
+    graph_file: String,
+
+    #[structopt(short = "s", long = "seq", about = "Path to node sequence file, cf.seg")]
+    seq_file: String,
+
+    #[structopt(short="n", long = "frac", about = "Fraction of nodes in LMEM to be present")]
+    node_fraq: f64,
+
+    #[structopt(short="i", long = "target", about = "Identifier of target path")]
+    target: String,
+
+    #[structopt(short="f", long = "from", about = "Start position on path")]
+    start: usize,
+
+    #[structopt(short="t", long = "to", about = "End position on path")]
+    end: usize,
+
+    #[structopt(short="c", long = "context", about = "Context to include, in nodes")]
+    context: usize,
+
+    #[structopt(short="o", long = "output", about = "Output path to write GFA to")]
+    output: String,
+
+}
+
 fn main() {
-    let f = "/media/codegodz/LaCie/Paper1/graph_timed.cf_seq".to_string();
-    let node_file = "/media/codegodz/LaCie/Paper1/graph_timed.cf_seg".to_string();
-    let target_id = "Reference:277_Sequence:CP047082".to_string();
-    let target_start = 9153;
-    let target_end = 9257;
-    let c = 100;
-    let n:f64 = 0.9;
-    let output_path = "output.gfa".to_string();
+    let opt = Opt::from_args();
+    let target_path = find_target(&opt.graph_file, &opt.target, opt.start, opt.end).unwrap();    
+    let node_map = load_nodes(&opt.seq_file);
+    let mut gfa_writer = GFAWriter::new(&opt.output, node_map.clone()).expect("Error creating GFA file");
 
-    let target_path = find_target(&f, &target_id, target_start, target_end).unwrap();
-    
-    let node_map = load_nodes(&node_file);
-
-    let mut gfa_writer = GFAWriter::new(&output_path, node_map.clone()).expect("Error creating GFA file");
-
-
-    find_overlaps(&f, &target_path, c, n, &mut gfa_writer);
+    find_overlaps(&opt.graph_file, &target_path, opt.context, opt.node_fraq, &mut gfa_writer);
 
 }
