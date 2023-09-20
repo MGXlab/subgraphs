@@ -114,7 +114,7 @@ fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize)
         if &line[..tab_index] == target_id {
             let v: Vec<&str> = line[tab_index+1..].split(' ').collect();
 
-            let lmem_target: Result<Vec<usize>, _> = v[start-1..stop]
+            let lmem_target: Result<Vec<usize>, _> = v[start..stop]
             .iter()
             .map(|&s| s[..s.len() - 1].parse())
             .collect();
@@ -124,8 +124,24 @@ fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize)
     Err(())
 }
 
+fn calc_location(node_path: &Vec<usize>, from_idx: usize, to_idx: usize, sequences: &HashMap<usize, String>, k: usize) ->  Result<(usize, usize), ()> {
+    let mut genomic_position = 1;
+    let mut start = 0;
+    for (i, node_id) in node_path.iter().enumerate() {
+        let seq_len = sequences.get(&node_id).unwrap().len();
+        if i == from_idx {
+            start = genomic_position;
+        } else if i == to_idx {
+            let stop = genomic_position + seq_len - 1;
+            return Ok((start, stop));
+        }
+        genomic_position += seq_len - k + 1;
+    }
+    return Err(());
+}
 
-fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, gfa_writer: &mut GFAWriter) {
+fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, gfa_writer: &mut GFAWriter, should_dump_positions: bool, 
+    sequences: &HashMap<usize, String>, k: usize) {
 
     // Input
     let mut reader = my_reader::BufReader::open(graph_path).unwrap();
@@ -157,7 +173,9 @@ fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, g
             if match_mask[i] == true {
                 
                 let r_boundary = cmp::min(i + target_path.len() + c, node_path.len());
-               
+                
+                let m = &node_path[i..r_boundary];
+
                 let set_bools = match_mask[i..r_boundary].iter().filter(|&&x| x).count();
 
                 if set_bools >= n_abs {
@@ -169,7 +187,14 @@ fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, g
                         gfa_writer
                         .add_to_gfa(&node_path[i..r_boundary])
                         .expect("Error adding node path to GFA");
-                        println!("Found for {} at {} with {} / {}; set bools {}", identifier, i, shared, target_set.len(), set_bools);
+
+
+                        // Check if we also should calculate the actual genomic positions 
+                        if should_dump_positions {
+                            let (start, end) = calc_location(&node_path, i, r_boundary-1, sequences, k).unwrap();
+                            println!("{}\t{}\t{}\t{}\t{}", identifier, shared, target_set.len(), start, end);
+                        }
+                        
                         i = r_boundary;
                     }
                 }
@@ -186,9 +211,15 @@ fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, g
 #[derive(Debug, StructOpt)]
 #[structopt(name = "Graphtie - subgraphs", about = "Extracting an LMEM subgraph")]
 struct Opt {
+
+    // flags
     #[structopt(short, long)]
     debug: bool,
 
+    #[structopt(short, long, requires("kmer"))]
+    coords: bool,
+
+    // other args
     #[structopt(short = "g", long = "graph", about = "Path to graph file, cf.seq")]
     graph_file: String,
 
@@ -213,6 +244,9 @@ struct Opt {
     #[structopt(short="o", long = "output", about = "Output path to write GFA to")]
     output: String,
 
+    #[structopt(short = "k", long = "kmer", requires("coords"))]
+    kmer: Option<usize>,
+
 }
 
 fn main() {
@@ -220,7 +254,8 @@ fn main() {
     let target_path = find_target(&opt.graph_file, &opt.target, opt.start, opt.end).unwrap();    
     let node_map = load_nodes(&opt.seq_file);
     let mut gfa_writer = GFAWriter::new(&opt.output, node_map.clone()).expect("Error creating GFA file");
+    let k = opt.kmer.unwrap_or(0);
 
-    find_overlaps(&opt.graph_file, &target_path, opt.context, opt.node_fraq, &mut gfa_writer);
+    find_overlaps(&opt.graph_file, &target_path, opt.context, opt.node_fraq, &mut gfa_writer, opt.coords, &node_map, k);
 
 }
