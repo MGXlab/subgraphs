@@ -24,8 +24,9 @@ impl GFAWriter {
         })
     }
 
-    fn add_to_gfa(&mut self, node_path: &[usize]) -> Result<(), std::io::Error> {
-        for &node_id in node_path {
+    fn add_to_gfa(&mut self, node_str_path: &[&str]) -> Result<(), std::io::Error> {
+        for node_id_str in node_str_path {
+            let node_id:usize = node_id_str[..node_id_str.len() - 1].parse::<usize>().unwrap();
             if let Some(sequence) = self.sequences.get(&node_id) {
                 let segment_line = format!("S\t{}\t*\t{}\n", node_id, sequence.len());
                 self.writer.write_all(segment_line.as_bytes())?;
@@ -34,17 +35,24 @@ impl GFAWriter {
             }
         }
 
-        let mut prev_node_id: Option<usize> = None;
+        let mut prev_node_id: Option<&str> = None;
 
-        for &node_id in node_path {
+        for node_id_str in node_str_path {
             if let Some(prev_id) = prev_node_id {
-                if let Some(overlap) = self.sequences.get(&prev_id).map(|seq| seq.len()) {
-                    let link_line = format!("L\t{}\t+\t{}\t+\t{}M\n", prev_id, node_id, overlap);
+                let node_id:usize = node_id_str[..node_id_str.len() - 1].parse::<usize>().unwrap();
+                if let Some(overlap) = self.sequences.get(&node_id).map(|seq| seq.len()) {
+
+                    // Extract the id and traversal dir
+                    let prev_id: &str = &prev_node_id.unwrap()[..prev_node_id.unwrap().len()-1];
+                    let prev_dir: &str = &prev_node_id.unwrap().chars().last().unwrap().to_string();
+                    let node_dir: &str = &node_id_str.chars().last().unwrap().to_string();
+
+                    let link_line = format!("L\t{}\t{}\t{}\t{}\t{}M\n", prev_id, prev_dir, node_id, node_dir, overlap);
                     self.writer.write_all(link_line.as_bytes())?;
                 }
             }
 
-            prev_node_id = Some(node_id);
+            prev_node_id = Some(&node_id_str);
         }
 
         Ok(())
@@ -111,7 +119,10 @@ fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize)
     while let Some(line_result) = reader.read_line(&mut buffer) {
         let line = line_result.unwrap().trim(); 
         let tab_index: usize = find_tab(&line);
-        if &line[..tab_index] == target_id {
+        let identifier = &line[..tab_index];
+        //println!("{} - {}", identifier, target_id);
+        if identifier == target_id {
+            println!("Target found");
             let v: Vec<&str> = line[tab_index+1..].split(' ').collect();
 
             let lmem_target: Result<Vec<usize>, _> = v[start..stop]
@@ -125,6 +136,7 @@ fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize)
 }
 
 fn calc_location(node_path: &Vec<usize>, from_idx: usize, to_idx: usize, sequences: &HashMap<usize, String>, k: usize) ->  Result<(usize, usize), ()> {
+    println!("From: {}, to: {}", from_idx, to_idx);
     let mut genomic_position = 1;
     let mut start = 0;
     for (i, node_id) in node_path.iter().enumerate() {
@@ -137,28 +149,55 @@ fn calc_location(node_path: &Vec<usize>, from_idx: usize, to_idx: usize, sequenc
         }
         genomic_position += seq_len - k + 1;
     }
+    println!("Complete fail");
     return Err(());
 }
 
-fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, gfa_writer: &mut GFAWriter, should_dump_positions: bool, 
-    sequences: &HashMap<usize, String>, k: usize) {
+struct Config {
+    graph_file: String, 
+    context_size: usize, 
+    node_fraction: f64, 
+    write_coords: bool,
+    coord_path: String,
+    write_colors: bool, 
+    color_path: String,
+    k: usize,
+}
 
+fn find_overlaps(c: &Config, target_path: &Vec<usize>, gfa_writer: &mut GFAWriter,  sequences: &HashMap<usize, String>) {
     // Input
-    let mut reader = my_reader::BufReader::open(graph_path).unwrap();
+    let mut reader = my_reader::BufReader::open(&c.graph_file).unwrap();
     let mut buffer = String::new();
+
+    let mut color_handle: Option<BufWriter<File>> = if c.write_colors {
+        Some(BufWriter::new(File::create(&c.color_path).unwrap()))
+    } else {
+        None
+    };
+
+    let mut coord_handle: Option<BufWriter<File>> = if c.write_coords {
+        Some(BufWriter::new(File::create(&c.coord_path).unwrap()))
+    } else {
+        None
+    };
+
+
+    // We might to dump the node colors based on our selection so we can color them on different metadata
+    // For this lets for now just hashmap the node ids to the identifiers
+    let mut color_map: HashMap<usize, Vec<String>> = HashMap::new();
 
     // Get hash set of target region
     let target_set: HashSet<usize> = target_path.iter().cloned().collect();
 
-    let n_abs: usize = (target_set.len() as f64 * n) as usize;
+    let n_abs: usize = (target_set.len() as f64 * c.node_fraction) as usize;
     while let Some(line_result) = reader.read_line(&mut buffer) {
         let line = line_result.unwrap().trim();
         let tab_index = find_tab(&line);
         let identifier: &str = &line[..tab_index];
 
-        let node_path: Vec<usize> = line[tab_index + 1..]
-            .split(' ')
-            .map(|s| s[..s.len() - 1].parse::<usize>())
+        let node_str_path: Vec<&str> =  line[tab_index + 1..].split(' ').collect(); // We can keep the original GFA formatting
+
+        let node_path: Vec<usize> = node_str_path.iter().map(|s| s[..s.len() - 1].parse::<usize>())
             .collect::<Result<Vec<usize>, _>>()
             .unwrap();
 
@@ -172,10 +211,8 @@ fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, g
     
             if match_mask[i] == true {
                 
-                let r_boundary = cmp::min(i + target_path.len() + c, node_path.len());
-                
-                let m = &node_path[i..r_boundary];
-
+                let r_boundary = cmp::min(i + target_path.len(), node_path.len()-1);
+                                                
                 let set_bools = match_mask[i..r_boundary].iter().filter(|&&x| x).count();
 
                 if set_bools >= n_abs {
@@ -184,15 +221,35 @@ fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, g
                     let shared: usize = (&candidate_set & &target_set).len();
 
                     if shared >= n_abs {
+
+                        // Now extract with the context, c
+                        let r_boundary = cmp::min(i + target_path.len() + c.context_size, node_path.len()-1);
+                        let l_boundary = cmp::max(i as i32 - c.context_size as i32, 0) as usize;
+                        println!("Max left: {}",l_boundary);
+
                         gfa_writer
-                        .add_to_gfa(&node_path[i..r_boundary])
+                        .add_to_gfa(&node_str_path[l_boundary..r_boundary])
                         .expect("Error adding node path to GFA");
 
-
+       
                         // Check if we also should calculate the actual genomic positions 
-                        if should_dump_positions {
-                            let (start, end) = calc_location(&node_path, i, r_boundary-1, sequences, k).unwrap();
-                            println!("{}\t{}\t{}\t{}\t{}", identifier, shared, target_set.len(), start, end);
+                        if c.write_coords {
+                            let (start, end) = calc_location(&node_path, l_boundary, r_boundary, sequences, c.k).unwrap();
+                            let s = format!("{}\t{}\t{}\t{}\t{}\n", identifier, shared, target_set.len(), start, end);
+
+                            if let Some(writer) = &mut coord_handle {
+                                writer.write_all(s.as_bytes()).unwrap();
+                            }
+                        }
+                        
+                       // println!("{}: {}", identifier, node_path[i..r_boundary].len());
+                        // we only have to keep track of the node colors when we write them in the end
+                        if c.write_colors {
+                            for node_id in node_path[i..r_boundary].iter() {
+                                color_map.entry(*node_id) 
+                                    .or_insert(Vec::new())
+                                    .push(identifier.to_string());
+                            }
                         }
                         
                         i = r_boundary;
@@ -200,6 +257,19 @@ fn find_overlaps(graph_path: &str, target_path: &Vec<usize>, c: usize, n: f64, g
                 }
             }
             i += 1;
+        }
+
+        if c.write_colors {
+            if let Some(writer) = &mut color_handle {
+                for (node_id, identifiers) in &color_map {
+                    //println!("node id: {} with identifiers: {}", node_id, identifiers.len());
+                    for identifier in identifiers.iter() {
+                        //println!("{}", identifier);
+                        let s = format!("{}\t{}\n", node_id, identifier);
+                        writer.write_all(s.as_bytes()).unwrap();
+                    }
+                }                
+            }            
         }
 
         // Clear the buffer for the next line
@@ -215,9 +285,6 @@ struct Opt {
     // flags
     #[structopt(short, long)]
     debug: bool,
-
-    #[structopt(short, long, requires("kmer"))]
-    coords: bool,
 
     // other args
     #[structopt(short = "g", long = "graph", about = "Path to graph file, cf.seq")]
@@ -244,18 +311,49 @@ struct Opt {
     #[structopt(short="o", long = "output", about = "Output path to write GFA to")]
     output: String,
 
-    #[structopt(short = "k", long = "kmer", requires("coords"))]
+    // Sub path positions
+
+    #[structopt(short = "y", long = "coords")]
+    coords: bool,
+
+    #[structopt(short = "k", long = "kmer")]
     kmer: Option<usize>,
+
+    #[structopt(short = "p", long = "coord_path")]
+    coord_path: Option<String>,
+
+    // Colors
+    
+    #[structopt(short = "x", long = "colors")]
+    colors: bool,
+
+    #[structopt(short = "a", long = "color_path")]
+    color_path: Option<String>,
+
 
 }
 
 fn main() {
     let opt = Opt::from_args();
     let target_path = find_target(&opt.graph_file, &opt.target, opt.start, opt.end).unwrap();    
+    println!("Target path: {:?}", target_path);
     let node_map = load_nodes(&opt.seq_file);
     let mut gfa_writer = GFAWriter::new(&opt.output, node_map.clone()).expect("Error creating GFA file");
-    let k = opt.kmer.unwrap_or(0);
+    
 
-    find_overlaps(&opt.graph_file, &target_path, opt.context, opt.node_fraq, &mut gfa_writer, opt.coords, &node_map, k);
+    let conf: Config = Config{
+        graph_file: opt.graph_file,
+        node_fraction: opt.node_fraq,
+        context_size: opt.context, 
+        write_coords: opt.coords, 
+        k : opt.kmer.unwrap_or(0),
+        coord_path: opt.coord_path.unwrap_or("".to_string()), 
+        write_colors: opt.colors,
+        color_path: opt.color_path.unwrap_or("".to_string()),
+    };
+
+    find_overlaps(&conf, &target_path, &mut gfa_writer, &node_map);
 
 }
+
+
