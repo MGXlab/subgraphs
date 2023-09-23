@@ -1,64 +1,11 @@
-use std::io::{BufWriter, Write};
 use std::collections::HashSet;
 use std::collections::HashMap;
 use std::cmp;
-use std::fs::File;
 use structopt::StructOpt;
-
-struct GFAWriter {
-    writer: BufWriter<File>,
-    sequences: HashMap<usize, String>,
-}
-
-impl GFAWriter {
-    fn new(out_path: &str, sequences: HashMap<usize, String>) -> Result<Self, std::io::Error> {
-        let f = File::create(out_path)?;
-        let mut writer = BufWriter::new(f);
-
-        // Write the header line
-        writer.write_all(b"H\tVN:Z:2.0\n")?;
-
-        Ok(GFAWriter {
-            writer,
-            sequences
-        })
-    }
-
-    fn add_to_gfa(&mut self, node_str_path: &[&str]) -> Result<(), std::io::Error> {
-        for node_id_str in node_str_path {
-            let node_id:usize = node_id_str[..node_id_str.len() - 1].parse::<usize>().unwrap();
-            if let Some(sequence) = self.sequences.get(&node_id) {
-                let segment_line = format!("S\t{}\t*\t{}\n", node_id, sequence.len());
-                self.writer.write_all(segment_line.as_bytes())?;
-            } else {
-                eprintln!("Error: Sequence not found for node_id {}", node_id);
-            }
-        }
-
-        let mut prev_node_id: Option<&str> = None;
-
-        for node_id_str in node_str_path {
-            if let Some(prev_id) = prev_node_id {
-                let node_id:usize = node_id_str[..node_id_str.len() - 1].parse::<usize>().unwrap();
-                if let Some(overlap) = self.sequences.get(&node_id).map(|seq| seq.len()) {
-
-                    // Extract the id and traversal dir
-                    let prev_id: &str = &prev_node_id.unwrap()[..prev_node_id.unwrap().len()-1];
-                    let prev_dir: &str = &prev_node_id.unwrap().chars().last().unwrap().to_string();
-                    let node_dir: &str = &node_id_str.chars().last().unwrap().to_string();
-
-                    let link_line = format!("L\t{}\t{}\t{}\t{}\t{}M\n", prev_id, prev_dir, node_id, node_dir, overlap);
-                    self.writer.write_all(link_line.as_bytes())?;
-                }
-            }
-
-            prev_node_id = Some(&node_id_str);
-        }
-
-        Ok(())
-    }
-
-}
+use std::path::Path;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::PathBuf;
+use std::fs::{File, remove_file};
 
 // No alloc reader from https://stackoverflow.com/questions/45882329/read-large-files-line-by-line-in-rust
 mod my_reader {
@@ -120,11 +67,9 @@ fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize)
         let line = line_result.unwrap().trim(); 
         let tab_index: usize = find_tab(&line);
         let identifier = &line[..tab_index];
-        //println!("{} - {}", identifier, target_id);
         if identifier == target_id {
             println!("Target found");
             let v: Vec<&str> = line[tab_index+1..].split(' ').collect();
-
             let lmem_target: Result<Vec<usize>, _> = v[start..stop]
             .iter()
             .map(|&s| s[..s.len() - 1].parse())
@@ -153,21 +98,87 @@ fn calc_location(node_path: &Vec<usize>, from_idx: usize, to_idx: usize, sequenc
     return Err(());
 }
 
-struct Config {
-    graph_file: String, 
-    context_size: usize, 
-    node_fraction: f64, 
-    write_coords: bool,
-    coord_path: String,
-    write_colors: bool, 
-    color_path: String,
+struct GFA {
+    link_writer: BufWriter<File>,
+    sequences: HashMap<usize, String>,
+    observed_segments: HashSet<usize>,
+    output: PathBuf,
     k: usize,
+    tmp: String,
 }
 
-fn find_overlaps(c: &Config, target_path: &Vec<usize>, gfa_writer: &mut GFAWriter,  sequences: &HashMap<usize, String>) {
+impl GFA {
+
+    fn new(output: &str, sequences: HashMap<usize, String>, tmp: &str, k: usize) -> Result<Self, std::io::Error>  {
+        // First create the tmp output files for the GFA 
+        let tmp_link_path = Path::new(tmp).join("tmp_links.txt");
+        println!("Tmp link path: {:?}", tmp_link_path);
+        let link_writer = BufWriter::new(File::create(tmp_link_path).expect("Failed to create tmp link file"));
+        let observed_segments: HashSet<usize> = HashSet::new();
+        Ok(GFA {
+            link_writer,
+            observed_segments,
+            output: Path::new(tmp).join(output.to_string()),
+            sequences,
+            k,
+            tmp: tmp.to_string()
+        })
+    }
+
+    fn split_node(node_str: &str) -> (usize, char) {
+        let node_id:usize = node_str[..node_str.len() - 1].parse::<usize>().unwrap();
+        let prev_dir: char = *&node_str.chars().last().unwrap();
+        (node_id, prev_dir)
+    }
+
+    fn add_path(&mut self, node_path: &[&str]) {
+        assert!(node_path.len() > 1, "Single node path not supported yet");
+        for (i, node_str) in node_path.iter().enumerate() {
+            if i == 0 {continue;};
+            let (node_id, node_sign) = GFA::split_node(node_str);
+            self.observed_segments.insert(node_id);
+            let (prev_id, prev_sign ) = GFA::split_node(node_path[i-1]);
+            let link_line = format!("L\t{}\t{}\t{}\t{}\t{}M\n", prev_id, prev_sign, node_id, node_sign, self.k);
+            self.link_writer.write_all(link_line.as_bytes()).expect("Couldnt write link to file");
+        }
+    }
+
+    fn finalize(&mut self) {
+        // We first open the output file, dump the segments then read the link file and copy them over
+        let mut writer = BufWriter::new(File::create(&self.output).expect("Couldn't create output file"));
+        println!("Writing segments...");
+        for seen_segment in &self.observed_segments {
+            let seq: &str = self.sequences.get(&seen_segment).expect("Node not present");
+            let segment_line = format!("S\t{}\t{}\n", seen_segment, seq);
+            writer.write_all(segment_line.as_bytes()).expect("Couldnt write link to file");
+        }
+        println!("Copying links to output file...");
+        let tmp_link_path = Path::new(&self.tmp).join("tmp_links.txt");
+        println!("Tmp link: {:?}", tmp_link_path);
+        let source_file = File::open(&tmp_link_path).expect("Could not open tmp link file");
+        let source_reader = BufReader::new(source_file);
+        for line in source_reader.lines() {
+            let line = line.unwrap();
+            writer.write_all(line.as_bytes()).unwrap();
+            writer.write_all(b"\n").unwrap(); 
+        }
+        println!("Cleaning tmp");
+        remove_file(&tmp_link_path).unwrap();
+        println!("Done writing GFA!");
+    }
+
+}
+
+
+
+fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usize, String>, output: &str) {
     // Input
     let mut reader = my_reader::BufReader::open(&c.graph_file).unwrap();
     let mut buffer = String::new();
+
+    // GFA output 
+    let mut gfa = GFA::new(output, sequences.clone(), &c.tmp, c.k ).unwrap();
+
 
     let mut color_handle: Option<BufWriter<File>> = if c.write_colors {
         Some(BufWriter::new(File::create(&c.color_path).unwrap()))
@@ -181,7 +192,6 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>, gfa_writer: &mut GFAWrite
         None
     };
 
-
     // We might to dump the node colors based on our selection so we can color them on different metadata
     // For this lets for now just hashmap the node ids to the identifiers
     let mut color_map: HashMap<usize, Vec<String>> = HashMap::new();
@@ -190,6 +200,9 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>, gfa_writer: &mut GFAWrite
     let target_set: HashSet<usize> = target_path.iter().cloned().collect();
 
     let n_abs: usize = (target_set.len() as f64 * c.node_fraction) as usize;
+
+    let mut counter = 0;
+
     while let Some(line_result) = reader.read_line(&mut buffer) {
         let line = line_result.unwrap().trim();
         let tab_index = find_tab(&line);
@@ -227,9 +240,7 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>, gfa_writer: &mut GFAWrite
                         let l_boundary = cmp::max(i as i32 - c.context_size as i32, 0) as usize;
                         println!("Max left: {}",l_boundary);
 
-                        gfa_writer
-                        .add_to_gfa(&node_str_path[l_boundary..r_boundary])
-                        .expect("Error adding node path to GFA");
+                        gfa.add_path(&node_str_path[l_boundary..r_boundary]);
 
        
                         // Check if we also should calculate the actual genomic positions 
@@ -245,7 +256,7 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>, gfa_writer: &mut GFAWrite
                        // println!("{}: {}", identifier, node_path[i..r_boundary].len());
                         // we only have to keep track of the node colors when we write them in the end
                         if c.write_colors {
-                            for node_id in node_path[i..r_boundary].iter() {
+                            for node_id in node_path[l_boundary..r_boundary].iter() {
                                 color_map.entry(*node_id) 
                                     .or_insert(Vec::new())
                                     .push(identifier.to_string());
@@ -275,6 +286,8 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>, gfa_writer: &mut GFAWrite
         // Clear the buffer for the next line
         buffer.clear();
     }
+    println!("Finalizing!");
+    gfa.finalize();
 }
 
 
@@ -311,6 +324,9 @@ struct Opt {
     #[structopt(short="o", long = "output", about = "Output path to write GFA to")]
     output: String,
 
+    #[structopt(short="m", long = "tmp", about = "Tepm dir")]
+    tmp: String,
+
     // Sub path positions
 
     #[structopt(short = "y", long = "coords")]
@@ -333,13 +349,24 @@ struct Opt {
 
 }
 
+struct Config {
+    graph_file: String, 
+    context_size: usize, 
+    node_fraction: f64, 
+    write_coords: bool,
+    coord_path: String,
+    write_colors: bool, 
+    tmp: String,
+    color_path: String,
+    k: usize,
+}
+
+
 fn main() {
     let opt = Opt::from_args();
     let target_path = find_target(&opt.graph_file, &opt.target, opt.start, opt.end).unwrap();    
     println!("Target path: {:?}", target_path);
     let node_map = load_nodes(&opt.seq_file);
-    let mut gfa_writer = GFAWriter::new(&opt.output, node_map.clone()).expect("Error creating GFA file");
-    
 
     let conf: Config = Config{
         graph_file: opt.graph_file,
@@ -350,9 +377,11 @@ fn main() {
         coord_path: opt.coord_path.unwrap_or("".to_string()), 
         write_colors: opt.colors,
         color_path: opt.color_path.unwrap_or("".to_string()),
+        tmp: opt.tmp,
     };
+    
 
-    find_overlaps(&conf, &target_path, &mut gfa_writer, &node_map);
+    find_overlaps(&conf, &target_path,  &node_map, &opt.output);
 
 }
 
