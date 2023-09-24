@@ -81,7 +81,7 @@ fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize)
 }
 
 fn calc_location(node_path: &Vec<usize>, from_idx: usize, to_idx: usize, sequences: &HashMap<usize, String>, k: usize) ->  Result<(usize, usize), ()> {
-    println!("From: {}, to: {}", from_idx, to_idx);
+   
     let mut genomic_position = 1;
     let mut start = 0;
     for (i, node_id) in node_path.iter().enumerate() {
@@ -155,6 +155,7 @@ impl GFA {
         println!("Copying links to output file...");
         let tmp_link_path = Path::new(&self.tmp).join("tmp_links.txt");
         println!("Tmp link: {:?}", tmp_link_path);
+        self.link_writer.flush().unwrap();
         let source_file = File::open(&tmp_link_path).expect("Could not open tmp link file");
         let source_reader = BufReader::new(source_file);
         for line in source_reader.lines() {
@@ -201,8 +202,6 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
 
     let n_abs: usize = (target_set.len() as f64 * c.node_fraction) as usize;
 
-    let mut counter = 0;
-
     while let Some(line_result) = reader.read_line(&mut buffer) {
         let line = line_result.unwrap().trim();
         let tab_index = find_tab(&line);
@@ -238,13 +237,13 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
                         // Now extract with the context, c
                         let r_boundary = cmp::min(i + target_path.len() + c.context_size, node_path.len()-1);
                         let l_boundary = cmp::max(i as i32 - c.context_size as i32, 0) as usize;
-                        println!("Max left: {}",l_boundary);
+                        
 
                         gfa.add_path(&node_str_path[l_boundary..r_boundary]);
 
-       
                         // Check if we also should calculate the actual genomic positions 
                         if c.write_coords {
+                            println!("ID: {}, from: {}, to: {}", identifier, l_boundary, r_boundary);
                             let (start, end) = calc_location(&node_path, l_boundary, r_boundary, sequences, c.k).unwrap();
                             let s = format!("{}\t{}\t{}\t{}\t{}\n", identifier, shared, target_set.len(), start, end);
 
@@ -253,7 +252,6 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
                             }
                         }
                         
-                       // println!("{}: {}", identifier, node_path[i..r_boundary].len());
                         // we only have to keep track of the node colors when we write them in the end
                         if c.write_colors {
                             for node_id in node_path[l_boundary..r_boundary].iter() {
@@ -273,9 +271,7 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
         if c.write_colors {
             if let Some(writer) = &mut color_handle {
                 for (node_id, identifiers) in &color_map {
-                    //println!("node id: {} with identifiers: {}", node_id, identifiers.len());
                     for identifier in identifiers.iter() {
-                        //println!("{}", identifier);
                         let s = format!("{}\t{}\n", node_id, identifier);
                         writer.write_all(s.as_bytes()).unwrap();
                     }
