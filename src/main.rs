@@ -138,7 +138,7 @@ impl GFA {
             let (node_id, node_sign) = GFA::split_node(node_str);
             self.observed_segments.insert(node_id);
             let (prev_id, prev_sign ) = GFA::split_node(node_path[i-1]);
-            let link_line = format!("L\t{}\t{}\t{}\t{}\t{}M\n", prev_id, prev_sign, node_id, node_sign, self.k);
+            let link_line = format!("L\t{}\t{}\t{}\t{}\t{}M\n", prev_id, prev_sign, node_id, node_sign, self.k-1); // k-1 overlap I suppose for all?
             self.link_writer.write_all(link_line.as_bytes()).expect("Couldnt write link to file");
         }
     }
@@ -223,8 +223,7 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
     
             if match_mask[i] == true {
                 
-                let r_boundary = cmp::min(i + target_path.len(), node_path.len()-1);
-                                                
+                let r_boundary = cmp::min(i + target_path.len(), node_path.len()-1);                      
                 let set_bools = match_mask[i..r_boundary].iter().filter(|&&x| x).count();
 
                 if set_bools >= n_abs {
