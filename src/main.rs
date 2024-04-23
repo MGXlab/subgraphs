@@ -252,6 +252,7 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
                         }
                         
                         // we only have to keep track of the node colors when we write them in the end
+                        // helps to visualize in bandage
                         if c.write_colors {
                             for node_id in node_path[l_boundary..r_boundary].iter() {
                                 color_map.entry(*node_id) 
