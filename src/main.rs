@@ -68,7 +68,7 @@ fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize)
         let tab_index: usize = find_tab(&line);
         let identifier = &line[..tab_index];
         if identifier == target_id {
-            println!("Target found");
+            println!("🔍Target found");
             let v: Vec<&str> = line[tab_index+1..].split(' ').collect();
             let lmem_target: Result<Vec<usize>, _> = v[start..stop]
             .iter()
@@ -81,7 +81,6 @@ fn find_target<'a>(graph_path: &'a str, target_id:&str, start:usize, stop:usize)
 }
 
 fn calc_location(node_path: &Vec<usize>, from_idx: usize, to_idx: usize, sequences: &HashMap<usize, String>, k: usize) ->  Result<(usize, usize), ()> {
-   
     let mut genomic_position = 1;
     let mut start = 0;
     for (i, node_id) in node_path.iter().enumerate() {
@@ -92,9 +91,8 @@ fn calc_location(node_path: &Vec<usize>, from_idx: usize, to_idx: usize, sequenc
             let stop = genomic_position + seq_len - 1;
             return Ok((start, stop));
         }
-        genomic_position += seq_len - k + 1;
+        genomic_position += seq_len - k;
     }
-    println!("Complete fail");
     return Err(());
 }
 
@@ -112,7 +110,7 @@ impl GFA {
     fn new(output: &str, sequences: HashMap<usize, String>, tmp: &str, k: usize) -> Result<Self, std::io::Error>  {
         // First create the tmp output files for the GFA 
         let tmp_link_path = Path::new(tmp).join("tmp_links.txt");
-        println!("Tmp link path: {:?}", tmp_link_path);
+       // println!("Tmp link path: {:?}", tmp_link_path);
         let link_writer = BufWriter::new(File::create(tmp_link_path).expect("Failed to create tmp link file"));
         let observed_segments: HashSet<usize> = HashSet::new();
         Ok(GFA {
@@ -146,15 +144,13 @@ impl GFA {
     fn finalize(&mut self) {
         // We first open the output file, dump the segments then read the link file and copy them over
         let mut writer = BufWriter::new(File::create(&self.output).expect("Couldn't create output file"));
-        println!("Writing segments...");
+        println!("🖊️ Writing segments...");
         for seen_segment in &self.observed_segments {
             let seq: &str = self.sequences.get(&seen_segment).expect("Node not present");
             let segment_line = format!("S\t{}\t{}\n", seen_segment, seq);
             writer.write_all(segment_line.as_bytes()).expect("Couldnt write link to file");
         }
-        println!("Copying links to output file...");
         let tmp_link_path = Path::new(&self.tmp).join("tmp_links.txt");
-        println!("Tmp link: {:?}", tmp_link_path);
         self.link_writer.flush().unwrap();
         let source_file = File::open(&tmp_link_path).expect("Could not open tmp link file");
         let source_reader = BufReader::new(source_file);
@@ -163,9 +159,9 @@ impl GFA {
             writer.write_all(line.as_bytes()).unwrap();
             writer.write_all(b"\n").unwrap(); 
         }
-        println!("Cleaning tmp");
+        println!("🧼 Cleaning tmp");
         remove_file(&tmp_link_path).unwrap();
-        println!("Done writing GFA!😊");
+        println!("😊 Done writing GFA!");
     }
 
 }
@@ -234,7 +230,7 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
                     if shared >= n_abs {
 
                         // Now extract with the context, c
-                        let r_boundary = cmp::min(i + target_path.len() + c.context_size, node_path.len()-1);
+                        let r_boundary = cmp::min(i + target_path.len() + c.context_size - 1, node_path.len()-1);
                         let l_boundary = cmp::max(i as i32 - c.context_size as i32, 0) as usize;
                         
 
@@ -242,7 +238,7 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
 
                         // Check if we also should calculate the actual genomic positions 
                         if c.write_coords {
-                            println!("ID: {}, from: {}, to: {}", identifier, l_boundary, r_boundary);
+                           // println!("ID: {}, from: {}, to: {}", identifier, l_boundary, r_boundary);
                             let (start, end) = calc_location(&node_path, l_boundary, r_boundary, sequences, c.k).unwrap();
                             let s = format!("{}\t{}\t{}\t{}\t{}\n", identifier, shared, target_set.len(), start, end);
 
@@ -271,11 +267,10 @@ fn find_overlaps(c: &Config, target_path: &Vec<usize>,  sequences: &HashMap<usiz
         if c.write_colors {
             if let Some(writer) = &mut color_handle {
                 for (node_id, identifiers) in &color_map {
-                    for identifier in identifiers.iter() {
-                        let s = format!("{}\t{}\n", node_id, identifier);
-                        writer.write_all(s.as_bytes()).unwrap();
-                    }
-                }                
+                    let joined_ids =  identifiers.join(";");
+                    let s = format!("{}\t{:?}\n", node_id, joined_ids);
+                    writer.write_all(s.as_bytes()).unwrap();
+                }            
             }            
         }
 

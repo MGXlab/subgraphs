@@ -1,0 +1,19 @@
+{
+    "parameters info": {
+        "input": "sequences/test.fasta",
+        "k": 7,
+        "output prefix": "graph/test_graph"
+    },
+    "basic info": {
+        "vertex count": 144
+    },
+    "contigs info": {
+        "maximal unitig count": 47,
+        "vertex count in the maximal unitigs": 144,
+        "shortest maximal unitig length": 7,
+        "longest maximal unitig length": 21,
+        "sum maximal unitig length": 426,
+        "avg. maximal unitig length": 9,
+        "_comment": "lengths are in bases"
+    }
+}
