@@ -23,6 +23,8 @@ First built a graph using [Cuttlefish](https://github.com/COMBINE-lab/cuttlefish
 - `-n` the fraction of nodes a path should traverse to end up in the final GFA, so `1.0` means all nodes in the subpath, but `0.8` means `80%` of the subpath nodes 
 - `-c` how many nodes left and right of the subpath to include in the final graph. Usually something like `10-100` makes sense to get a clue of the context
 - `-o` where to write the .GFA of the subgraph
+
+---  Option but useful:
 - `--coords` + `-p`, to write the matching coordinates in the other sequences, this can be ommitted but might be nice to extract all subsequences for further analysis
 - `-x` + `-a` We write a `.csv` that we can load in bandage that, for each node, has a list of the genomes we found it in. We can use that to color or just look at.
 
